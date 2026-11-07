@@ -1,0 +1,11 @@
+node_modules/
+dist/
+coverage/
+.vercel/
+.DS_Store
+*.log
+
+# Secrets: only the .env.example files are committed
+.env
+.env.*
+!.env.example
