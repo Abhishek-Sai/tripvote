@@ -3,12 +3,24 @@
   "private": true,
   "version": "0.1.0",
   "description": "TripVote: group travel decision maker",
-  "workspaces": ["client", "server"],
-  "engines": { "node": ">=20" },
+  "workspaces": [
+    "client",
+    "server"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev:client": "npm run dev -w client",
     "dev:server": "npm run dev -w server",
     "build": "npm run build -w client",
-    "test": "npm test -w server"
+    "test": "npm test -w server",
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.14.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.14.0"
   }
 }
