@@ -3,7 +3,7 @@ const { createClient } = require('@supabase/supabase-js');
 let client;
 
 function isSupabaseConfigured() {
-  return Boolean(process.env.SUPABASE_URL || process.env.SUPABASE_SERVICE_ROLE_KEY);
+  return Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
 }
 
 // Uses the service-role key, which bypasses RLS: keep this module server-side.

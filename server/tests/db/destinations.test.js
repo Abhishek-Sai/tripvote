@@ -28,13 +28,13 @@ describe('destinations', () => {
     await expect(t.createDestination(trip.trip_id, '')).rejects.toThrow(/destinations_name_valid/);
   });
 
-  it('FR-05: accepts a note of 2000 characters and rejects 2001', async () => {
+  it('FR-05: accepts a note of 200 characters and rejects 201', async () => {
     const trip = await t.createTrip();
 
     await expect(
-      t.createDestination(trip.trip_id, 'A', null, 'x'.repeat(2000)),
+      t.createDestination(trip.trip_id, 'A', null, 'x'.repeat(200)),
     ).resolves.toBeDefined();
-    await expect(t.createDestination(trip.trip_id, 'B', null, 'x'.repeat(2001))).rejects.toThrow(
+    await expect(t.createDestination(trip.trip_id, 'B', null, 'x'.repeat(201))).rejects.toThrow(
       /destinations_note_valid/,
     );
   });

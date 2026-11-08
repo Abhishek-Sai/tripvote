@@ -17,7 +17,7 @@ create table public.destinations (
   constraint destinations_name_valid
     check (name = btrim(name) and char_length(name) between 1 and 60),
   constraint destinations_note_valid
-    check (note is null or char_length(note) <= 2000),
+    check (note is null or char_length(note) <= 200),
   constraint destinations_destination_trip_unique unique (destination_id, trip_id),
   -- The creator must be a member of the same trip; cleared if they are removed.
   constraint destinations_created_by_fkey
