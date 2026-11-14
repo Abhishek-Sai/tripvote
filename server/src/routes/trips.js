@@ -114,7 +114,8 @@ function tripsRouter(db) {
   router.get('/:tripId', requireMember(db), async (req, res) => {
     const { rows } = await db.query(
       `select t.trip_id, t.name, t.deadline, t.status, t.created_at, t.winner_id,
-              (select count(*)::int from members m where m.trip_id = t.trip_id) as member_count
+              (select count(*)::int from members m where m.trip_id = t.trip_id) as member_count,
+              (select count(*)::int from ballots b where b.trip_id = t.trip_id) as voted_count
          from trips t
         where t.trip_id = $1`,
       [req.params.tripId],
@@ -122,7 +123,13 @@ function tripsRouter(db) {
     if (rows.length === 0) throw tripNotFound();
 
     res.json({
-      trip: { ...formatTrip(rows[0]), winnerId: rows[0].winner_id, memberCount: rows[0].member_count },
+      trip: {
+        ...formatTrip(rows[0]),
+        winnerId: rows[0].winner_id,
+        memberCount: rows[0].member_count,
+        // FR-10: how many have voted, never who.
+        votedCount: rows[0].voted_count,
+      },
       me: req.member,
     });
   });

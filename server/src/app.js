@@ -2,6 +2,7 @@ const cors = require('cors');
 const express = require('express');
 const { ApiError } = require('./lib/errors');
 const { healthRouter } = require('./routes/health');
+const { pollRouter } = require('./routes/poll');
 const { tripsRouter } = require('./routes/trips');
 
 // db: the database interface from lib/db.js, or null when not configured.
@@ -15,6 +16,7 @@ function createApp({ db = null } = {}) {
 
   if (db) {
     app.use('/api/trips', tripsRouter(db));
+    app.use('/api/trips', pollRouter(db));
   } else {
     app.use('/api', (req, res) => {
       res.status(503).json({ error: { code: 'db_unavailable', message: 'Database is not configured' } });
@@ -34,7 +36,9 @@ function createApp({ db = null } = {}) {
 // eslint-disable-next-line no-unused-vars
 function errorHandler(err, req, res, next) {
   if (err instanceof ApiError) {
-    return res.status(err.status).json({ error: { code: err.code, message: err.message } });
+    return res
+      .status(err.status)
+      .json({ error: { code: err.code, message: err.message, ...err.details } });
   }
   if (err.type === 'entity.parse.failed') {
     return res.status(400).json({ error: { code: 'invalid_json', message: 'Body must be valid JSON' } });

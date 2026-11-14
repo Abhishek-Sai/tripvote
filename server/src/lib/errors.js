@@ -1,8 +1,10 @@
 class ApiError extends Error {
-  constructor(status, code, message) {
+  // details: optional extra fields for the client, e.g. which option is a duplicate.
+  constructor(status, code, message, details) {
     super(message);
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
