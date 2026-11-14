@@ -2,6 +2,7 @@ const { Router } = require('express');
 const { ApiError } = require('../lib/errors');
 const { generateToken, hashToken } = require('../lib/tokens');
 const { isUuid, optionalFutureDeadline, requiredText } = require('../lib/validate');
+const { requireMember } = require('../middleware/auth');
 
 const MAX_MEMBERS = 20; // FR-04
 
@@ -78,6 +79,52 @@ function tripsRouter(db) {
     if (rows.length === 0) throw tripNotFound();
 
     res.json({ name: rows[0].name, isFull: rows[0].member_count >= MAX_MEMBERS });
+  });
+
+  // FR-02 / FR-04 / FR-31: join with a display name, no account.
+  router.post('/:tripId/members', async (req, res) => {
+    const { tripId } = req.params;
+    if (!isUuid(tripId)) throw tripNotFound();
+    const displayName = requiredText(req.body?.displayName, 'displayName', 30);
+
+    const { token, member } = await db.transaction(async (tx) => {
+      // Lock the trip row so two people joining at once cannot both pass the
+      // capacity check (PR-04).
+      const trip = await tx.query('select trip_id from trips where trip_id = $1 for update', [
+        tripId,
+      ]);
+      if (trip.rows.length === 0) throw tripNotFound();
+
+      const { rows } = await tx.query(
+        'select count(*)::int as n from members where trip_id = $1',
+        [tripId],
+      );
+      if (rows[0].n >= MAX_MEMBERS) {
+        throw new ApiError(409, 'trip_full', 'This trip is full.');
+      }
+
+      return insertMember(tx, tripId, displayName, false);
+    });
+
+    res.status(201).json({ member: formatMember(member), memberToken: token });
+  });
+
+  // SEC-01: trip details for its members only. Also how a returning browser
+  // checks its saved token still works (FR-31).
+  router.get('/:tripId', requireMember(db), async (req, res) => {
+    const { rows } = await db.query(
+      `select t.trip_id, t.name, t.deadline, t.status, t.created_at, t.winner_id,
+              (select count(*)::int from members m where m.trip_id = t.trip_id) as member_count
+         from trips t
+        where t.trip_id = $1`,
+      [req.params.tripId],
+    );
+    if (rows.length === 0) throw tripNotFound();
+
+    res.json({
+      trip: { ...formatTrip(rows[0]), winnerId: rows[0].winner_id, memberCount: rows[0].member_count },
+      me: req.member,
+    });
   });
 
   return router;
