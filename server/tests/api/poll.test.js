@@ -54,6 +54,8 @@ async function setUpPoll() {
   return { ...trip, rome, paris, oslo };
 }
 
+const vote = (person, rankedDestinationIds) => person.put('/ballot').send({ rankedDestinationIds });
+
 describe('destinations', () => {
   it('FR-05: a member adds a destination with a note', async () => {
     const { as } = await setUpTrip();
@@ -133,16 +135,15 @@ describe('destinations', () => {
 });
 
 describe('removing a destination', () => {
-  it('lets the organizer remove one', async () => {
-    const { as, paris } = await setUpPoll();
+  it('lets the organizer remove one and shifts later ranks up on ballots', async () => {
+    const { as, rome, paris, oslo } = await setUpPoll();
+    await vote(as.alex, [rome, paris, oslo]);
 
     const res = await as.organizer.delete(`/destinations/${paris}`);
 
     expect(res.status).toBe(204);
-    expect((await as.alex.get('/destinations')).body.destinations.map((d) => d.name)).toEqual([
-      'Rome',
-      'Oslo',
-    ]);
+    expect((await as.alex.get('/ballot')).body.ballot.rankedDestinationIds).toEqual([rome, oslo]);
+    expect((await as.alex.get('/destinations')).body.destinations).toHaveLength(2);
   });
 
   it('SEC-02: returns 403 to a regular member', async () => {
@@ -169,6 +170,141 @@ describe('removing a destination', () => {
     await as.organizer.post('/close');
 
     expect((await as.organizer.delete(`/destinations/${rome}`)).status).toBe(409);
+  });
+});
+
+describe('ballots', () => {
+  it('FR-08: saves a ranked ballot and says "Vote saved."', async () => {
+    const { as, rome, paris, oslo } = await setUpPoll();
+
+    const res = await vote(as.alex, [paris, rome, oslo]);
+
+    expect(res.status).toBe(200);
+    expect(res.body.message).toBe('Vote saved.');
+    expect(res.body.ballot.rankedDestinationIds).toEqual([paris, rome, oslo]);
+  });
+
+  it('FR-07: allows ranking just one option', async () => {
+    const { as, oslo } = await setUpPoll();
+
+    expect((await vote(as.alex, [oslo])).status).toBe(200);
+  });
+
+  it('FR-26 / SEC-03: resubmitting replaces the ballot instead of adding one', async () => {
+    const { as, rome, paris, oslo } = await setUpPoll();
+    await vote(as.alex, [rome]);
+
+    await vote(as.alex, [oslo, paris]);
+
+    expect((await as.alex.get('/ballot')).body.ballot.rankedDestinationIds).toEqual([oslo, paris]);
+    expect((await as.alex.get('')).body.trip.votedCount).toBe(1);
+  });
+
+  it.each([
+    ['an empty ranking', () => []],
+    ['a missing ranking', () => undefined],
+    ['a ranking that is not a list', () => 'Rome'],
+    ['a destination ranked twice', (p) => [p.rome, p.rome]],
+    ['something that is not an id', () => ['Rome']],
+  ])('FR-08: rejects %s with 400', async (label, makeRanking) => {
+    const p = await setUpPoll();
+
+    const res = await vote(p.as.alex, makeRanking(p));
+
+    expect(res.status).toBe(400);
+    expect((await p.as.alex.get('/ballot')).body.ballot).toBeNull();
+  });
+
+  it('FR-08: rejects a destination from a different trip', async () => {
+    const mine = await setUpPoll();
+    const other = await setUpPoll();
+
+    const res = await vote(mine.as.alex, [mine.rome, other.paris]);
+
+    expect(res.status).toBe(400);
+  });
+
+  it('FR-07: needs at least two destinations before anyone can vote', async () => {
+    const { as } = await setUpTrip();
+    const rome = await addDestination(as.alex, 'Rome');
+
+    const res = await vote(as.alex, [rome]);
+
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('not_enough_options');
+  });
+
+  it('FR-12: rejects submitting or changing a ballot after the poll closes', async () => {
+    const { as, rome, paris } = await setUpPoll();
+    await vote(as.alex, [rome]);
+    await as.organizer.post('/close');
+
+    const changed = await vote(as.alex, [paris]);
+    const fresh = await vote(as.blake, [rome]);
+
+    for (const res of [changed, fresh]) {
+      expect(res.status).toBe(409);
+      expect(res.body.error).toEqual({ code: 'poll_closed', message: 'Voting has been closed for this trip.' });
+    }
+    expect((await as.alex.get('/ballot')).body.ballot.rankedDestinationIds).toEqual([rome]);
+  });
+
+  it('returns no ballot to a member who has not voted', async () => {
+    const { as } = await setUpPoll();
+
+    expect((await as.blake.get('/ballot')).body).toEqual({ ballot: null });
+  });
+
+  it('SEC-01: requires a member token', async () => {
+    const { tripId, rome, paris } = await setUpPoll();
+
+    const res = await api().put(`/api/trips/${tripId}/ballot`).send({ rankedDestinationIds: [rome, paris] });
+
+    expect(res.status).toBe(401);
+  });
+});
+
+describe('ballot privacy (FR-09, FR-10, SEC-04)', () => {
+  it('each member sees only their own ballot, including the organizer', async () => {
+    const { as, rome, paris, oslo } = await setUpPoll();
+    await vote(as.alex, [rome, paris, oslo]);
+    await vote(as.blake, [oslo, paris]);
+
+    expect((await as.alex.get('/ballot')).body.ballot.rankedDestinationIds).toEqual([rome, paris, oslo]);
+    expect((await as.blake.get('/ballot')).body.ballot.rankedDestinationIds).toEqual([oslo, paris]);
+    expect((await as.organizer.get('/ballot')).body.ballot).toBeNull();
+  });
+
+  it('no other response reveals anyone else\'s ranking, even to the organizer', async () => {
+    const { as, rome, paris, oslo } = await setUpPoll();
+    await vote(as.alex, [oslo, rome, paris]);
+
+    const responses = [
+      await as.organizer.get(''),
+      await as.organizer.get('/destinations'),
+      await as.organizer.get('/ballot'),
+      await as.blake.get(''),
+      await as.blake.get('/destinations'),
+    ];
+
+    const alexRanking = JSON.stringify([oslo, rome, paris]);
+    for (const res of responses) {
+      const body = JSON.stringify(res.body);
+      expect(body).not.toContain(alexRanking);
+      expect(body).not.toMatch(/ordered_destination_ids|rankedDestinationIds"\s*:\s*\[/);
+    }
+  });
+
+  it('FR-10: shows how many have voted out of how many members, not who', async () => {
+    const { as, rome, paris } = await setUpPoll();
+    await vote(as.alex, [rome]);
+    await vote(as.blake, [paris]);
+
+    const { trip } = (await as.organizer.get('')).body;
+
+    expect(trip.votedCount).toBe(2);
+    expect(trip.memberCount).toBe(3);
+    expect(Object.keys(trip)).not.toContain('voters');
   });
 });
 
