@@ -5,16 +5,9 @@ const { Pool } = require('pg');
 //   transaction(async (tx) => { await tx.query(...) })
 // Production uses a pg Pool against Supabase's pooler; tests use PGlite.
 
-function createPgDb(connectionString) {
-  const pool = new Pool({
-    connectionString,
-    // Supabase requires TLS. Its certificate chain is not in Node's default
-    // store, so verification is off unless a CA certificate is supplied.
-    ssl: process.env.DATABASE_CA_CERT
-      ? { ca: process.env.DATABASE_CA_CERT }
-      : { rejectUnauthorized: false },
-    max: 5,
-  });
+// ssl: from buildSslConfig() in lib/dbSsl.js.
+function createPgDb(connectionString, ssl) {
+  const pool = new Pool({ connectionString, ssl, max: 5 });
 
   return {
     query: (sql, params) => pool.query(sql, params),
