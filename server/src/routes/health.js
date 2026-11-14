@@ -1,10 +1,13 @@
 const { Router } = require('express');
-const { isSupabaseConfigured } = require('../lib/supabase');
 
-const router = Router();
+function healthRouter(db) {
+  const router = Router();
 
-router.get('/', (req, res) => {
-  res.json({ status: 'ok', databaseConfigured: isSupabaseConfigured() });
-});
+  router.get('/', (req, res) => {
+    res.json({ status: 'ok', databaseConfigured: Boolean(db) });
+  });
 
-module.exports = router;
+  return router;
+}
+
+module.exports = { healthRouter };
