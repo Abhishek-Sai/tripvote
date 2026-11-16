@@ -17,7 +17,7 @@ export async function request(path, { method = 'GET', body, token, organizer, si
     });
   } catch (error) {
     if (error.name === 'AbortError') throw error;
-    throw new Error('Could not reach TripVote. Check your connection and try again.');
+    throw new Error('Could not reach TripVote. Check your connection and try again.', { cause: error });
   }
   if (response.status === 204) return null;
 
