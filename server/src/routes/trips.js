@@ -3,6 +3,7 @@ const { ApiError } = require('../lib/errors');
 const { generateToken, hashToken } = require('../lib/tokens');
 const { isUuid, optionalFutureDeadline, requiredText } = require('../lib/validate');
 const { requireMember } = require('../middleware/auth');
+const { deadlineParam } = require('../middleware/deadline');
 
 const MAX_MEMBERS = 20; // FR-04
 
@@ -33,6 +34,7 @@ async function insertMember(tx, tripId, displayName, organizer) {
 
 function tripsRouter(db) {
   const router = Router();
+  router.param('tripId', deadlineParam(db));
 
   // FR-01: create a trip and its organizer. Returns the organizer token once;
   // only its hash is stored, so it cannot be shown again.
