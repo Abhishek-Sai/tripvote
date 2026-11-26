@@ -168,3 +168,20 @@ progress { width: 100%; height: .8rem; accent-color: #2b674f; }
   .ballot li { grid-template-columns: auto minmax(0, 1fr); }
   .ballot .row-actions { grid-column: 2; }
 }
+
+/* Results (FR-15) */
+.results { margin-bottom: 1.25rem; }
+.winner { display: grid; gap: .3rem; padding: 1rem 1.1rem; margin-bottom: 1rem; border-radius: .7rem; background: var(--ink); color: var(--accent); }
+.winner .eyebrow { color: var(--accent); }
+.winner strong { font-size: 1.6rem; color: #f9fff2; overflow-wrap: anywhere; }
+.notice.tie p { color: var(--ink); margin: 0 0 .35rem; }
+.tie-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .6rem; }
+.table-scroll { overflow-x: auto; margin: .8rem 0 .4rem; }
+.rounds { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.rounds th, .rounds td { padding: .5rem .65rem; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; }
+.rounds th:first-child { text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.rounds thead th { color: var(--muted); font-size: .82rem; font-weight: 700; }
+.rounds tfoot th, .rounds tfoot td { color: var(--muted); font-size: .85rem; font-weight: 500; border-bottom: 0; }
+.rounds tr.is-winner th, .rounds tr.is-winner td { background: #edf4dd; font-weight: 800; }
+.rounds td.eliminated { color: #9a5149; text-decoration: line-through; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
