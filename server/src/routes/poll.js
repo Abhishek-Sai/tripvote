@@ -1,7 +1,9 @@
 const { Router } = require('express');
 const { ApiError, badRequest } = require('../lib/errors');
-const { isUuid, requiredText } = require('../lib/validate');
+const { isUuid, optionalFutureDeadline, requiredText } = require('../lib/validate');
 const { requireMember, requireOrganizer } = require('../middleware/auth');
+const { closeAndCount, countTrip } = require('../lib/pollResults');
+const { deadlineParam } = require('../middleware/deadline');
 
 const MIN_OPTIONS_TO_VOTE = 2; // FR-07
 
@@ -12,8 +14,13 @@ const pollClosed = () =>
 // open. FOR SHARE lets members add options and vote at the same time, but makes
 // a concurrent "Close poll" wait, so nothing slips in after closing (FR-12).
 async function requireOpenPoll(tx, tripId) {
-  const { rows } = await tx.query('select status from trips where trip_id = $1 for share', [tripId]);
-  if (rows.length === 0 || rows[0].status !== 'open') throw pollClosed();
+  const { rows } = await tx.query(
+    `select status, deadline is not null and deadline <= now() as deadline_passed
+       from trips where trip_id = $1 for share`,
+    [tripId],
+  );
+  // FR-28: a passed deadline counts as closed even before the poll is marked closed.
+  if (rows.length === 0 || rows[0].status !== 'open' || rows[0].deadline_passed) throw pollClosed();
 }
 
 function optionalNote(value) {
@@ -50,6 +57,7 @@ function formatDestination(row) {
 function pollRouter(db) {
   const router = Router();
   const member = requireMember(db);
+  router.param('tripId', deadlineParam(db));
 
   // FR-05: the trip's destination options, oldest first.
   router.get('/:tripId/destinations', member, async (req, res) => {
@@ -164,18 +172,98 @@ function pollRouter(db) {
     res.json({ ballot: rows.length ? formatBallot(rows[0]) : null });
   });
 
-  // FR-11: the organizer closes the poll. Counting the results is T5.
+  // FR-11 / FR-13: the organizer closes the poll and the results are counted.
   router.post('/:tripId/close', member, requireOrganizer, async (req, res) => {
+    const outcome = await db.transaction(async (tx) => {
+      const { rows } = await tx.query(
+        'select status from trips where trip_id = $1 for update',
+        [req.params.tripId],
+      );
+      if (rows[0]?.status !== 'open') {
+        throw new ApiError(409, 'poll_not_open', 'The poll is already closed.');
+      }
+      return closeAndCount(tx, req.params.tripId);
+    });
+    res.json(outcome);
+  });
+
+  // FR-27: the organizer reopens a closed poll. Ballots stay; the winner is
+  // cleared. A passed deadline would close it again at once, so the organizer
+  // may set a new one; otherwise the deadline is removed.
+  router.post('/:tripId/reopen', member, requireOrganizer, async (req, res) => {
+    const deadline = optionalFutureDeadline(req.body?.deadline);
     const { rows } = await db.query(
-      `update trips set status = 'closed'
-        where trip_id = $1 and status = 'open'
-        returning status`,
-      [req.params.tripId],
+      `update trips set status = 'open', winner_id = null, deadline = $2
+        where trip_id = $1 and status in ('closed', 'tie')
+        returning status, deadline`,
+      [req.params.tripId, deadline],
     );
     if (rows.length === 0) {
-      throw new ApiError(409, 'poll_not_open', 'The poll is already closed.');
+      throw new ApiError(409, 'poll_not_closed', 'The poll is already open.');
     }
-    res.json({ status: 'closed' });
+    res.json({
+      status: rows[0].status,
+      deadline: rows[0].deadline ? new Date(rows[0].deadline).toISOString() : null,
+    });
+  });
+
+  // FR-30: the organizer picks the winner from the two tied finalists.
+  router.post('/:tripId/resolve-tie', member, requireOrganizer, async (req, res) => {
+    const { tripId } = req.params;
+    const destinationId = req.body?.destinationId;
+    if (!isUuid(destinationId)) throw badRequest('destinationId must be one of the tied destinations');
+
+    await db.transaction(async (tx) => {
+      const { rows } = await tx.query('select status from trips where trip_id = $1 for update', [tripId]);
+      if (rows[0]?.status !== 'tie') {
+        throw new ApiError(409, 'no_tie', 'There is no tie to resolve.');
+      }
+      // Ballots cannot change while the poll is closed, so this recount
+      // gives the same finalists as when it closed.
+      const { finalists } = await countTrip(tx, tripId);
+      if (!finalists.includes(destinationId.toLowerCase())) {
+        throw badRequest('destinationId must be one of the tied destinations');
+      }
+      await tx.query(
+        `update trips set status = 'closed', winner_id = $2 where trip_id = $1`,
+        [tripId, destinationId.toLowerCase()],
+      );
+    });
+
+    res.json({ status: 'closed', winnerId: destinationId.toLowerCase() });
+  });
+
+  // FR-15 / SEC-04: round-by-round totals for a closed poll. Only aggregate
+  // counts: never a ballot, a ranking, or who voted for what.
+  router.get('/:tripId/results', member, async (req, res) => {
+    const { tripId } = req.params;
+    const { rows } = await db.query('select status, winner_id from trips where trip_id = $1', [tripId]);
+    const { status, winner_id: winnerId } = rows[0];
+    if (status === 'open') {
+      throw new ApiError(409, 'poll_open', 'Results are available once the poll closes.');
+    }
+
+    const result = await countTrip(db, tripId);
+    const names = new Map(result.options.map((o) => [o.destination_id, o.name]));
+    res.json({
+      status,
+      outcome: result.outcome,
+      winnerId,
+      // FR-30: the count ended in a tie and the organizer chose.
+      chosenByOrganizer: result.outcome === 'tie' && winnerId !== null,
+      finalists: result.finalists.map((id) => ({ destinationId: id, name: names.get(id) })),
+      ballotCount: result.ballotCount,
+      optionCount: result.options.length,
+      rounds: result.rounds.map((round, index) => ({
+        round: index + 1,
+        counts: Object.entries(round.counts)
+          .map(([id, votes]) => ({ destinationId: id, name: names.get(id), votes }))
+          .sort((a, b) => b.votes - a.votes || a.name.localeCompare(b.name)),
+        exhausted: round.exhausted,
+        activeBallots: round.activeBallots,
+        eliminatedId: round.eliminatedId,
+      })),
+    });
   });
 
   return router;

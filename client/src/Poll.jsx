@@ -1,12 +1,21 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import CopyLink from './CopyLink.jsx';
+import Results from './Results.jsx';
 import { request } from './api.js';
+
+// How often an open page checks for other members' changes. The SRS asks for
+// Realtime only on the itinerary (FR-17); the poll page polls instead.
+const POLL_INTERVAL_MS = 5000;
 
 export default function Poll({ initial, token, organizerRoute }) {
   const [snapshot, setSnapshot] = useState(initial);
   const [draft, setDraft] = useState(null);
   const [feedback, setFeedback] = useState({});
   const [busy, setBusy] = useState(false);
+  const [results, setResults] = useState(null);
+  // Counts this page's own saves, so a background check that started before a
+  // save cannot overwrite the newer state with an older one.
+  const writes = useRef(0);
   const { trip, destinations, ballot } = snapshot;
   const path = '/' + trip.tripId;
   const open = trip.status === 'open';
@@ -29,20 +38,78 @@ export default function Poll({ initial, token, organizerRoute }) {
     changeRanking(next);
   }
 
-  async function refresh() {
+  // FR-15: results exist once the poll has closed (by the organizer or the deadline).
+  useEffect(() => {
+    if (open) return undefined;
+    const controller = new AbortController();
+    request(path + '/results', { token, signal: controller.signal })
+      .then(setResults)
+      .catch((error) => {
+        if (error.name !== 'AbortError') setFeedback({ error: error.message });
+      });
+    return () => controller.abort();
+  }, [open, path, token, trip.status, trip.winnerId]);
+
+  // FR-28: when the deadline passes while the page is open, reload so members
+  // see the poll close and the results without pressing Refresh.
+  useEffect(() => {
+    if (!open || !trip.deadline) return undefined;
+    const wait = new Date(trip.deadline).getTime() - Date.now() + 1000;
+    if (wait > 2 ** 31 - 1) return undefined; // too far off for setTimeout
+    const timer = setTimeout(() => {
+      refresh().catch(() => setFeedback({ error: 'Could not refresh the poll. Use Refresh to try again.' }));
+    }, Math.max(wait, 0));
+    return () => clearTimeout(timer);
+    // refresh only reads path and token, which are in the dependency list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, trip.deadline, path, token]);
+
+  // Keep the page current: new destinations, voting progress, the poll closing
+  // or reopening, and the results. Pauses while the tab is hidden and checks
+  // again as soon as it is shown. A member's unsaved ranking is kept.
+  useEffect(() => {
+    let stopped = false;
+    async function check() {
+      if (document.hidden) return;
+      try {
+        await refresh({ background: true });
+      } catch {
+        // A missed check is retried on the next tick; Refresh shows errors.
+      }
+    }
+    const timer = setInterval(check, POLL_INTERVAL_MS);
+    const onVisible = () => { if (!stopped && !document.hidden) check(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+    // refresh only reads path and token, which are in the dependency list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [path, token]);
+
+  async function refresh({ background = false } = {}) {
+    const startedAt = writes.current;
     const [{ trip: latest }, options, saved] = await Promise.all([
       request(path, { token }),
       request(path + '/destinations', { token }),
       request(path + '/ballot', { token }),
     ]);
+    const latestResults = latest.status !== 'open' ? await request(path + '/results', { token }) : null;
+    // Drop a background result if this page saved something in the meantime.
+    if (background && writes.current !== startedAt) return;
+    if (latestResults) setResults(latestResults);
     setSnapshot({ trip: latest, destinations: options.destinations, ballot: saved.ballot });
   }
 
   async function act(action, message) {
     setBusy(true);
     setFeedback({});
+    writes.current += 1;
     try {
       await action();
+      writes.current += 1;
       setFeedback({ message });
       try {
         await refresh();
@@ -101,9 +168,25 @@ export default function Poll({ initial, token, organizerRoute }) {
   function closePoll() {
     if (!window.confirm('Close this poll? Members will no longer be able to vote.')) return;
     act(async () => {
-      const { status } = await request(path + '/close', { method: 'POST', token, organizer });
-      setSnapshot((current) => ({ ...current, trip: { ...current.trip, status } }));
-    }, 'Poll closed.');
+      await request(path + '/close', { method: 'POST', token, organizer });
+    }, 'Poll closed. Results are below.');
+  }
+
+  function reopenPoll() {
+    if (!window.confirm('Reopen voting? Saved ballots are kept and the current result is cleared. Any deadline is removed.')) return;
+    act(async () => {
+      await request(path + '/reopen', { method: 'POST', token, organizer });
+      setResults(null);
+    }, 'Voting reopened.');
+  }
+
+  function resolveTie(finalist) {
+    if (!window.confirm('Choose ' + finalist.name + ' as the winning destination?')) return;
+    act(async () => {
+      await request(path + '/resolve-tie', {
+        method: 'POST', token, organizer, body: { destinationId: finalist.destinationId },
+      });
+    }, finalist.name + ' is the winning destination.');
   }
 
   async function refreshManually() {
@@ -135,13 +218,7 @@ export default function Poll({ initial, token, organizerRoute }) {
       </section>
       {feedback.error && <p className="notice error" role="alert">{feedback.error}</p>}
       {feedback.message && <p className="notice" role="status">{feedback.message}</p>}
-      {!open && (
-        <p className="notice">
-          {byId.has(trip.winnerId)
-            ? 'Winning destination: ' + byId.get(trip.winnerId).name
-            : 'Voting has closed. Results are unavailable in this version.'}
-        </p>
-      )}
+      {!open && <Results results={results} organizer={organizer} busy={busy} onResolveTie={resolveTie} />}
       <div className="poll-grid">
         <section className="panel">
           <h2>Destinations</h2>
@@ -178,9 +255,11 @@ export default function Poll({ initial, token, organizerRoute }) {
         </section>
         <section className="panel ballot-panel">
           <h2>Your ballot</h2>
-          <p>{open && destinations.length < 2
-            ? 'Voting opens when there are at least two destinations.'
-            : 'Rank one or more destinations. Only you can see your ballot.'}</p>
+          <p>{!open
+            ? 'Voting has closed. This is the ballot you submitted. Only you can see it.'
+            : destinations.length < 2
+              ? 'Voting opens when there are at least two destinations.'
+              : 'Rank one or more destinations. Only you can see your ballot.'}</p>
           <form onSubmit={saveBallot}>
             <ol className="ballot">
               {ranking.map((id, index) => {
@@ -223,7 +302,9 @@ export default function Poll({ initial, token, organizerRoute }) {
           <h2>Organizer controls</h2>
           <CopyLink label="Member invite" path={'/trip/' + trip.tripId} />
           <CopyLink label="Private organizer link" path={'/trip/' + trip.tripId + '/organizer#' + token} />
-          {open && <button type="button" className="danger" disabled={busy} onClick={closePoll}>Close poll</button>}
+          {open
+            ? <button type="button" className="danger" disabled={busy} onClick={closePoll}>Close poll</button>
+            : <button type="button" className="secondary" disabled={busy} onClick={reopenPoll}>Reopen poll</button>}
         </section>
       )}
     </div>
