@@ -6,8 +6,11 @@ const { Pool } = require('pg');
 // Production uses a pg Pool against Supabase's pooler; tests use PGlite.
 
 // ssl: from buildSslConfig() in lib/dbSsl.js.
-function createPgDb(connectionString, ssl) {
-  const pool = new Pool({ connectionString, ssl, max: 5 });
+function createPgDb(connectionString, ssl, { max = 5 } = {}) {
+  // Close idle connections quickly: serverless instances can freeze between requests.
+  const pool = new Pool({ connectionString, ssl, max, idleTimeoutMillis: 10_000 });
+  // An idle connection dropped by the pooler must not crash the process.
+  pool.on('error', (err) => console.error('Database pool error:', err.code || err.message));
 
   return {
     query: (sql, params) => pool.query(sql, params),
