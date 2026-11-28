@@ -23,8 +23,6 @@ The trip workspace keeps voting progress visible and places organizer controls b
 
 From the repository root, run `npm ci`. Configure `server/.env` from `server/.env.example` and start `npm run dev:server` and `npm run dev:client` in separate terminals. Vite forwards local API calls to Express on port 3001. The database connection stays on the server.
 
-## Vercel preview
+## Hosting on Vercel
 
-Import the repository into a Vercel project with the repository root as its root directory. The root configuration builds `client/dist` and routes invitation and organizer URLs to the SPA. Set `VITE_API_BASE_URL` to the HTTPS origin of a deployed Express API, without `/api`, and set the API's `CLIENT_ORIGIN` to the exact preview frontend origin. A stable preview hostname makes matching that setting easier. Use the development database for preview.
-
-The API base URL is public build configuration. Keep database credentials in the Express deployment. Verify direct loading of both invitation links, name-only joining from a separate browser session, destination submission, ballot replacement, and organizer-only closing.
+The frontend and the API are deployed together as one Vercel project, as SRS 3.2.3 describes. See [deployment.md](deployment.md) for the steps. The frontend calls the API on the same origin, so `VITE_API_BASE_URL` stays unset and no CORS setup is needed.
