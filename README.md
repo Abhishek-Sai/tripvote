@@ -29,9 +29,14 @@ npm run dev:server
 npm run dev:client
 ```
 
-Open http://localhost:5173. The page shows whether it can reach the API.
+Open http://localhost:5173.
 
 Run the tests with `npm test`.
+
+## Deployment
+
+The app and the API deploy together to Vercel. See
+[docs/deployment.md](docs/deployment.md).
 
 ## Security rule
 
